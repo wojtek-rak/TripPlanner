@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      CI: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'global.json') }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      # Conditional Playwright setup: only install if the TripPlanner.E2E project exists.
+      # We use hashFiles to detect a .csproj in TripPlanner.E2E and only then install CLI + browsers (with system deps).
+      - name: Install Playwright (CLI + browsers)
+        if: ${{ hashFiles('TripPlanner.E2E/**/.csproj') != '' }}
+        run: |
+          dotnet tool install --global Microsoft.Playwright.CLI
+          "$HOME/.dotnet/tools/playwright" install --with-deps
+
+      - name: Test
+        run: dotnet test --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --collect:"Xplat Code Coverage"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          if-no-files-found: ignore
+          path: |
+            **/TestResults/*.trx
+            **/coverage.cobertura.xml
+
+      - name: Upload Playwright traces (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          if-no-files-found: ignore
+          path: |
+            **/playwright-traces/**
+            playwright-traces/**
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      CI: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Publish
+        run: dotnet publish TripPlanner/*.csproj -c Release -o ./artifacts/publish
+
+      - name: Upload drop
+        uses: actions/upload-artifact@v4
+        with:
+          name: drop
+          path: artifacts/publish
