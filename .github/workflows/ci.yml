@@ -43,9 +43,10 @@ jobs:
         run: dotnet build --configuration Release --no-restore
 
       # Conditional Playwright setup: only install if the TripPlanner.E2E project exists.
-      # We use hashFiles to detect a .csproj in TripPlanner.E2E and only then install CLI + browsers (with system deps).
+      # Fix: the glob must match *.csproj. Previous pattern didn't match and skipped installation,
+      # causing "Executable doesn't exist" errors. This installs CLI + browsers (with system deps) on Ubuntu.
       - name: Install Playwright (CLI + browsers)
-        if: ${{ hashFiles('TripPlanner.E2E/**/.csproj') != '' }}
+        if: ${{ hashFiles('TripPlanner.E2E/**/*.csproj') != '' }}
         run: |
           dotnet tool install --global Microsoft.Playwright.CLI
           "$HOME/.dotnet/tools/playwright" install --with-deps
