@@ -1,0 +1,45 @@
+.trip-card {
+  padding: 16px;
+  border: 1px solid var(--ant-border-color, #f0f0f0);
+  border-radius: 8px;
+  background: var(--ant-color-bg-container, #fff);
+
+  /* Limit overall card width and center it */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.trip-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: 8px;
+
+  /* Limit size on larger viewports so the image appears smaller */
+  max-width: 320px;
+  margin-left: auto; /* keep it to the right side of the column */
+}
+
+.trip-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.action-label {
+  margin-left: 4px;
+}
+
+@media (max-width: 767.98px) {
+  .trip-card { padding: 12px; max-width: 100%; }
+
+  /* Ensure media remains full-width on small screens */
+  .trip-media {
+    max-width: 100%;
+    margin-left: 0;
+  }
+}

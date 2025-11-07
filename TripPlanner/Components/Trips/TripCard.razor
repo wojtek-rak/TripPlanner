@@ -1,0 +1,55 @@
+@using AntDesign
+@using AntDesign.Icons
+@using Microsoft.AspNetCore.Components.Web
+@using TripPlanner.Data.Repositories
+@using TripPlanner.Utilities
+@inject NavigationManager Nav
+
+<article class="trip-card" role="article" aria-labelledby="title-@Trip.Id">
+    <Row Gutter="16" Align="@RowAlign.Middle">
+        <Col Xs="24" Md="14">
+        <Space Direction="@SpaceDirection.Vertical" Size="@SpaceSize.Small" Style="width:100%">
+                <h4 id="title-@Trip.Id" class="ant-typography" style="margin:0">
+                    <a href="@($"/trips/{Trip.Id}/summary")"
+                       @onclick="OnNavigateToTrip"
+                       @onclick:preventDefault
+                       class="ant-typography">
+                        @Trip.Title
+                    </a>
+                </h4>
+                <div class="ant-typography-secondary">
+                    @Trip.City, @Trip.Country — @Trip.StartDate.ToShortRangeString(Trip.EndDate) (@Trip.GetDurationText())
+                </div>
+            </Space>
+        </Col>
+
+        <Col Xs="24" Md="10">
+            <div class="trip-media">
+                @if (string.IsNullOrWhiteSpace(Trip.CoverUrl))
+                {
+                    <img src="https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1200&auto=format&fit=crop&q=80"
+                         alt="@($"{Trip.Title} cover")" />
+                }
+                else
+                {
+                    <img src="@Trip.CoverUrl" alt="@($"{Trip.Title} cover")" />
+                }
+            </div>
+        </Col>
+    </Row>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public TripDto Trip { get; set; } = default!;
+
+    [Parameter] public EventCallback<TripDto> OnManageSharing { get; set; }
+    [Parameter] public EventCallback<TripDto> OnEditTrip { get; set; }
+    [Parameter] public EventCallback<TripDto> OnDuplicate { get; set; }
+    [Parameter] public EventCallback<TripDto> OnArchive { get; set; }
+    [Parameter] public EventCallback<TripDto> OnDelete { get; set; }
+
+    private static readonly Trigger[] ClickTrigger = new[] { Trigger.Click };
+
+    private void OnNavigateToTrip(MouseEventArgs _)
+        => Nav.NavigateTo($"/trips/{Trip.Id}/summary");
+}

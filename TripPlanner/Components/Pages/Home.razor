@@ -1,0 +1,11 @@
+﻿@page "/"
+@inject NavigationManager Nav
+
+<PageTitle>Home</PageTitle>
+
+@code {
+    protected override void OnAfterRender(bool firstRender)
+    {
+        Nav.NavigateTo("/trips", replace: true);
+    }
+}

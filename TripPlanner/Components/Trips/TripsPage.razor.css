@@ -1,0 +1,12 @@
+.trips-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  padding: 12px 0;
+  background: var(--ant-color-bg-elevated, #fff);
+  border-bottom: 1px solid var(--ant-border-color, #f0f0f0);
+}
+
+.trips-header.is-affixed {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}

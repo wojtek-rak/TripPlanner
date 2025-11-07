@@ -1,0 +1,163 @@
+﻿@page "/Account/Manage"
+
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Identity
+@using TripPlanner.Data
+
+@inject UserManager<ApplicationUser> UserManager
+@inject SignInManager<ApplicationUser> SignInManager
+@inject IdentityUserAccessor UserAccessor
+@inject IdentityRedirectManager RedirectManager
+
+<PageTitle>Profile</PageTitle>
+
+<h3>Profile</h3>
+<StatusMessage />
+
+<div class="row">
+    <div class="col-xl-6">
+        <EditForm Model="Input" FormName="profile" OnValidSubmit="OnValidSubmitAsync" method="post">
+            <DataAnnotationsValidator />
+            <ValidationSummary class="text-danger" role="alert" />
+
+            <!-- Core profile -->
+            <div class="form-floating mb-3">
+                <input type="text" value="@username" id="username" class="form-control" placeholder="Choose your username." disabled />
+                <label for="username" class="form-label">Username</label>
+            </div>
+            <div class="form-floating mb-3">
+                <InputText @bind-Value="Input.PhoneNumber" id="Input.PhoneNumber" class="form-control" placeholder="Enter your phone number" />
+                <label for="Input.PhoneNumber" class="form-label">Phone number</label>
+                <ValidationMessage For="() => Input.PhoneNumber" class="text-danger" />
+            </div>
+
+            <hr />
+
+            <!-- OpenAI/Azure OpenAI settings -->
+            <h5>AI settings</h5>
+            <div class="form-floating mb-3">
+                <InputText @bind-Value="Input.OpenAIEndpoint" id="Input.OpenAIEndpoint" class="form-control" placeholder="https://<resource>.cognitiveservices.azure.com/" />
+                <label for="Input.OpenAIEndpoint" class="form-label">Endpoint</label>
+                <div class="form-text">
+                    Azure OpenAI resource endpoint (e.g., https://your-resource.cognitiveservices.azure.com/). For OpenAI, use https://api.openai.com/.
+                </div>
+                <ValidationMessage For="() => Input.OpenAIEndpoint" class="text-danger" />
+            </div>
+
+            <div class="form-floating mb-3">
+                <InputText  @bind-Value="Input.OpenAIApiKey" id="Input.OpenAIApiKey" class="form-control" placeholder="sk-..." />
+                <label for="Input.OpenAIApiKey" class="form-label">API key</label>
+                <div class="form-text">
+                    Stored encrypted-at-rest by your database provider settings. Make sure this account has least-privilege.
+                </div>
+                <ValidationMessage For="() => Input.OpenAIApiKey" class="text-danger" />
+            </div>
+
+            <div class="form-floating mb-3">
+                <InputText @bind-Value="Input.OpenAIModel" id="Input.OpenAIModel" class="form-control" placeholder="gpt-4.1 or your Azure deployment name" />
+                <label for="Input.OpenAIModel" class="form-label">Model / Deployment</label>
+                <div class="form-text">
+                    For Azure, enter the deployment name (e.g., gpt-4.1). For OpenAI, enter model id (e.g., gpt-4o-mini).
+                </div>
+                <ValidationMessage For="() => Input.OpenAIModel" class="text-danger" />
+            </div>
+
+            <button type="submit" class="w-100 btn btn-lg btn-primary">Save</button>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private ApplicationUser user = default!;
+    private string? username;
+    private string? phoneNumber;
+
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [SupplyParameterFromForm]
+    private InputModel Input { get; set; } = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        user = await UserAccessor.GetRequiredUserAsync(HttpContext);
+        username = await UserManager.GetUserNameAsync(user);
+        phoneNumber = await UserManager.GetPhoneNumberAsync(user);
+
+        // populate form with current values
+        Input.PhoneNumber ??= phoneNumber;
+        Input.OpenAIEndpoint ??= user.OpenAIEndpoint;
+        Input.OpenAIApiKey ??= user.OpenAIApiKey;
+        Input.OpenAIModel ??= user.OpenAIModel ?? "";
+    }
+
+    private async Task OnValidSubmitAsync()
+    {
+        // Track if we need to persist user entity changes
+        var requiresUpdate = false;
+
+        // Phone number
+        if (Input.PhoneNumber != phoneNumber)
+        {
+            var setPhoneResult = await UserManager.SetPhoneNumberAsync(user, Input.PhoneNumber);
+            if (!setPhoneResult.Succeeded)
+            {
+                RedirectManager.RedirectToCurrentPageWithStatus("Error: Failed to set phone number.", HttpContext);
+            }
+        }
+
+        // Normalize inputs (trim)
+        var endpoint = (Input.OpenAIEndpoint ?? "").Trim();
+        var apiKey = (Input.OpenAIApiKey ?? "").Trim();
+        var model = (Input.OpenAIModel ?? "").Trim();
+
+        // Apply only if changed to avoid unnecessary writes
+        if (!string.Equals(user.OpenAIEndpoint ?? "", endpoint, StringComparison.Ordinal))
+        {
+            user.OpenAIEndpoint = endpoint;
+            requiresUpdate = true;
+        }
+        if (!string.Equals(user.OpenAIApiKey ?? "", apiKey, StringComparison.Ordinal))
+        {
+            user.OpenAIApiKey = apiKey;
+            requiresUpdate = true;
+        }
+        if (!string.Equals(user.OpenAIModel ?? "", model, StringComparison.Ordinal))
+        {
+            user.OpenAIModel = model;
+            requiresUpdate = true;
+        }
+
+        if (requiresUpdate)
+        {
+            var result = await UserManager.UpdateAsync(user);
+            if (!result.Succeeded)
+            {
+                var msg = $"Error: Failed to update AI settings: {string.Join(", ", result.Errors.Select(e => e.Description))}";
+                RedirectManager.RedirectToCurrentPageWithStatus(msg, HttpContext);
+            }
+        }
+
+        await SignInManager.RefreshSignInAsync(user);
+        RedirectManager.RedirectToCurrentPageWithStatus("Your profile has been updated", HttpContext);
+    }
+
+    private sealed class InputModel
+    {
+        [Phone]
+        [Display(Name = "Phone number")]
+        public string? PhoneNumber { get; set; }
+
+        [StringLength(1000)]
+        [Display(Name = "Endpoint")]
+        public string? OpenAIEndpoint { get; set; }
+
+        [StringLength(1000)]
+        [Display(Name = "API key")]
+        public string? OpenAIApiKey { get; set; }
+
+        [StringLength(200)]
+        [Display(Name = "Model / Deployment")]
+        public string? OpenAIModel { get; set; }
+    }
+}

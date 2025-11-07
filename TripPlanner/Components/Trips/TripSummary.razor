@@ -1,0 +1,189 @@
+@page "/trips/{id:int}/summary"
+@using System.Globalization
+@using AntDesign
+@using TripPlanner.Data.Repositories
+@inherits TripPlanner.Components.Common.AuthenticatedComponentBase
+@inject NavigationManager Nav
+@inject ITripManager TripManager
+
+<Affix OffsetTop="0">
+    <div class="summary-header" style="background-color:var(--ant-color-bg-container, #fff);backdrop-filter:saturate(180%) blur(6px);padding:12px 16px;border-bottom:1px solid var(--ant-color-border-secondary,#f0f0f0);">
+        <Row Justify="@RowJustify.SpaceBetween" Align="@RowAlign.Middle">
+            <Col>
+                <Space Direction="@SpaceDirection.Vertical" Size="@SpaceSize.Middle" Align="@SpaceAlign.Start" Wrap>
+                    <span class="ant-typography" style="font-size:18px;font-weight:600;">
+                        @if (_trip is null) { <text>Trip</text> }
+                        else { <text>@_trip.Title — @_trip.City, @_trip.Country</text> }
+                    </span>
+
+                    @if (_trip is not null)
+                    {
+                        <span class="ant-typography" style="font-size:12px;color:var(--ant-color-text-tertiary,#888);">
+                            @FormatDate(_trip.StartDate) – @FormatDate(_trip.EndDate)
+                        </span>
+                    }
+                </Space>
+            </Col>
+
+            <Col>
+                <!-- increased Space Size to add more gap between buttons -->
+                <Space Size="@SpaceSize.Large" Align="@SpaceAlign.Center" Wrap>
+                    <Button Type="@ButtonType.Default" OnClick="GoBack" AriaLabel="Back to trips">Back</Button>
+                    <Button Type="@ButtonType.Primary" OnClick="Edit" Disabled="@(_trip is null)" AriaLabel="Edit trip">Edit details</Button>
+                </Space>
+            </Col>
+        </Row>
+    </div>
+</Affix>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <Alert Message="Error" Description="@_error" Type="@AlertType.Error" ShowIcon="true" />
+}
+else if (_loading)
+{
+    <Card Style="margin-top:12px">
+        <Skeleton Active="true" Title="true"></Skeleton>
+    </Card>
+}
+else if (_trip is not null)
+{
+    <Card Style="margin-top:12px">
+        @if (!string.IsNullOrWhiteSpace(_trip.CoverUrl))
+        {
+            <img src="@_trip.CoverUrl"
+                 alt="Trip cover for @_trip.Title"
+                 style="width:100%;max-height:280px;object-fit:cover;border-radius:8px;" />
+        }
+        <div style="margin-top:8px;color:var(--ant-color-text-secondary,#666);">
+            <strong>Location:</strong> @_trip.City, @_trip.Country
+        </div>
+        <div style="color:var(--ant-color-text-tertiary,#888);">
+            <strong>Dates:</strong> @FormatDate(_trip.StartDate) – @FormatDate(_trip.EndDate)
+        </div>
+    </Card>
+
+    <Card Title="Plan per day" Style="margin-top:12px">
+        @if (_plan is null || _plan.Count == 0)
+        {
+            <Alert Message="No plan yet"
+                   Description="Click 'Generate plan' to create a per-day itinerary."
+                   Type="@AlertType.Info"
+                   ShowIcon="true" />
+        }
+        else
+        {
+            <Tabs Size="@TabSize.Large">
+                 <TabPane>
+                    <Timeline>
+                        @foreach (var day in _plan.OrderBy(p => p.DayNumber).ToList())
+                        {
+                            <TimelineItem>
+                                <div>
+                                    <div class="ant-typography" style="font-weight:600;margin-bottom:6px;">
+                                        Day @day.DayNumber
+                                    </div>
+
+                                    @if (!string.IsNullOrWhiteSpace(day.Summary))
+                                    {
+                                        <div style="color:var(--ant-color-text-secondary,#666);margin-bottom:6px;">
+                                            <strong>@day.Summary</strong>
+                                        </div>
+                                    }
+
+                                    @{
+                                        var desc = day.Description ?? string.Empty;
+                                        var preview = desc.Length > 500 ? desc.Substring(0, 500) + "..." : desc;
+                                    }
+
+                                    @if (!string.IsNullOrWhiteSpace(preview))
+                                    {
+                                        <div style="color:var(--ant-color-text-tertiary,#888);white-space:pre-wrap;">
+                                            @preview
+                                        </div>
+                                    }
+                                </div>
+                            </TimelineItem>
+                        }
+                    </Timeline>
+                </TabPane>
+            </Tabs>
+        }
+    </Card>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private TripDto? _trip;
+    private List<TripDayPlanDto> _plan = new();
+    private bool _loading = true;
+    private bool _generating = false;
+    private string? _error;
+
+    private CancellationTokenSource? _loadCts;
+    private CancellationTokenSource? _genCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            _loading = false;
+            return;
+        }
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loadCts?.Cancel();
+        _loadCts = new CancellationTokenSource();
+
+        try
+        {
+            _loading = true;
+            _error = null;
+
+            // Use manager method that scopes by userId and tripId to avoid returning other users' trips
+            _trip = await TripManager.GetAsync(Id, UserId!, _loadCts.Token);
+            if (_trip is null)
+            {
+                _error = "Trip not found.";
+                return;
+            }
+
+            // Prefer repository/manager cached DTO source (TripDayPlanDto)
+            var dtoList = await TripManager.GetAsync(Id, _loadCts.Token);
+            _plan = dtoList?.ToList() ?? new List<TripDayPlanDto>();
+        }
+        catch (OperationCanceledException) { /* ignore */ }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo("/trips");
+
+    private void Edit()
+    {
+        if (_trip is null) return;
+        Nav.NavigateTo($"/trips/{_trip.Id}/edit");
+    }
+
+    private static string FormatDate(DateTime d)
+        => d.ToString("ddd, dd MMM", CultureInfo.InvariantCulture);
+
+    public void Dispose()
+    {
+        try { _loadCts?.Cancel(); } catch { }
+        try { _genCts?.Cancel(); } catch { }
+        _loadCts?.Dispose();
+        _genCts?.Dispose();
+    }
+}

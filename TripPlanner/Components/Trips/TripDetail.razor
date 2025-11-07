@@ -1,0 +1,343 @@
+@page "/trips/{id:int}/edit"
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Authorization
+@using TripPlanner.Components.Trips
+@using TripPlanner.Data.Repositories
+@using TripPlanner.Data
+@inherits TripPlanner.Components.Common.AuthenticatedComponentBase
+@inject ITripManager TripManager
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+@attribute [Authorize]
+
+<h3>Edit Trip</h3>
+
+@if (isLoading)
+{
+    <p><em>Loading trip…</em></p>
+}
+else if (!string.IsNullOrEmpty(error) || !string.IsNullOrEmpty(AuthError))
+{
+    <div class="alert alert-danger">@error @AuthError</div>
+}
+else if (edit is not null)
+{
+    <EditForm Model="edit" OnValidSubmit="SaveAsync">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        @if (!string.IsNullOrEmpty(validationError))
+        {
+            <div class="alert alert-warning" role="alert">@validationError</div>
+        }
+        @if (!string.IsNullOrEmpty(info))
+        {
+            <div class="alert alert-success" role="alert">@info</div>
+        }
+
+        <div class="mb-3">
+            <label class="form-label">Title</label>
+            <InputText class="form-control" @bind-Value="edit.Title" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">City</label>
+            <InputText class="form-control" @bind-Value="edit.City" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Country</label>
+            <InputText class="form-control" @bind-Value="edit.Country" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Cover URL</label>
+            <InputText class="form-control" @bind-Value="edit.CoverUrl" />
+        </div>
+
+        <div class="form-check mb-3">
+            <InputCheckbox class="form-check-input" @bind-Value="edit.IsOwner" />
+            <label class="form-check-label">This is your trip</label>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Start Date</label>
+            <InputDate class="form-control" @bind-Value="edit.StartDate" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">End Date</label>
+            <InputDate class="form-control" @bind-Value="edit.EndDate" />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Notes</label>
+            <InputText class="form-control" @bind-Value="edit.Notes" />
+        </div>
+
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary" disabled="@isSaving">@(isSaving ? "Saving…" : "Save")</button>
+            <button type="button" class="btn btn-secondary" @onclick="OnBackClick">Back</button>
+            <button type="button" class="btn btn-warning" @onclick="GeneratePlanAsync" disabled="@isGenerating">
+                @(isGenerating ? "Generating…" : "Generate Plan")
+            </button>
+            <button type="button" class="btn btn-danger" @onclick="DeleteTripAsync">Delete</button>
+        </div>
+    </EditForm>
+}
+
+@code
+{
+    [Parameter]
+    public int Id { get; set; }
+
+    private bool isLoading = true;
+    private bool isSaving = false;
+    private bool isGenerating = false;
+    private string? error;
+    private string? validationError;
+    private string? info;
+
+    private TripEditModel? edit;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            isLoading = false;
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    void OnBackClick()
+    {
+        Nav.NavigateTo($"/trips/{Id}/summary");
+    }
+
+    private async Task LoadAsync()
+    {
+        isLoading = true;
+        error = null;
+        try
+        {
+            // Reuse existing List API and select one item by id
+            var items = await TripManager.ListAsync(UserId!);
+            var dto = items.FirstOrDefault(t => t.Id == Id);
+            if (dto is null)
+            {
+                error = "Trip not found.";
+                return;
+            }
+
+            edit = new TripEditModel
+            {
+                Title = dto.Title,
+                City = dto.City,
+                Country = dto.Country,
+                CoverUrl = dto.CoverUrl,
+                IsOwner = dto.IsOwner,
+                StartDate = dto.StartDate,
+                EndDate = dto.EndDate,
+                Notes = dto.Notes
+            };
+        }
+        catch
+        {
+            error = "Failed to load trip.";
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            error = AuthError;
+            return;
+        }
+
+        if (edit is null)
+        {
+            error = "Nothing to save.";
+            return;
+        }
+
+        validationError = null;
+        info = null;
+
+        if (string.IsNullOrWhiteSpace(edit.Title))
+        {
+            validationError = "Title is required.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(edit.City))
+        {
+            validationError = "City is required.";
+            return;
+        }
+        if (edit.StartDate > edit.EndDate)
+        {
+            validationError = "Start date must be on or before end date.";
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            var update = new TripUpdateModel(
+                Title: edit.Title!,
+                City: edit.City!,
+                Country: edit.Country ?? string.Empty,
+                StartDate: edit.StartDate,
+                EndDate: edit.EndDate,
+                CoverUrl: edit.CoverUrl,
+                IsOwner: edit.IsOwner,
+                Notes: edit.Notes
+            );
+
+            var updated = await TripManager.UpdateAsync(Id, UserId!, update);
+            if (updated is null)
+            {
+                error = "Trip not found or you don't have access.";
+                return;
+            }
+
+            info = "Saved.";
+        }
+        catch (ArgumentException ex)
+        {
+            validationError = ex.Message;
+        }
+        catch
+        {
+            error = "Save failed.";
+        }
+        finally
+        {
+            isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task GeneratePlanAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            error = AuthError;
+            return;
+        }
+
+        if (edit is null)
+        {
+            error = "Nothing to generate.";
+            return;
+        }
+
+        // Basic validations needed by generator
+        if (string.IsNullOrWhiteSpace(edit.City))
+        {
+            validationError = "City is required before generating.";
+            return;
+        }
+        if (edit.StartDate > edit.EndDate)
+        {
+            validationError = "Start date must be on or before end date.";
+            return;
+        }
+
+        isGenerating = true;
+        validationError = null;
+        try
+        {
+            // Construct minimal Trip entity required by the generator
+            var trip = new TripPlanner.Data.Trip
+            {
+                Id = Id,
+                Title = edit.Title ?? string.Empty,
+                City = edit.City ?? string.Empty,
+                Country = edit.Country ?? string.Empty,
+                StartDate = edit.StartDate,
+                EndDate = edit.EndDate,
+                CoverUrl = edit.CoverUrl,
+                IsOwner = edit.IsOwner,
+                Notes = edit.Notes
+            };
+
+            await TripManager.GenerateAsync(trip);
+            info = "Plan generated.";
+        }
+        catch (Exception)
+        {
+            error = "Failed to generate plan.";
+        }
+        finally
+        {
+            isGenerating = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteTripAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            error = AuthError;
+            return;
+        }
+
+        var confirmed = await JS.InvokeAsync<bool>("confirm", "Delete this trip? This action cannot be undone.");
+        if (!confirmed) return;
+
+        try
+        {
+            var ok = await TripManager.RemoveAsync(Id, UserId!);
+            if (ok)
+            {
+                // Navigate back to trips after successful deletion
+                Nav.NavigateTo("/trips", replace: true);
+            }
+            else
+            {
+                error = "Unable to delete trip.";
+            }
+        }
+        catch
+        {
+            error = "Delete request failed.";
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
+    private class TripEditModel
+    {
+        [Required]
+        public string? Title { get; set; }
+
+        [Required]
+        public string? City { get; set; }
+
+        public string? Country { get; set; }
+
+        public string? CoverUrl { get; set; }
+
+        public bool IsOwner { get; set; } = true;
+
+        [Required]
+        public DateTime StartDate { get; set; } = DateTime.Today;
+
+        [Required]
+        public DateTime EndDate { get; set; } = DateTime.Today;
+
+        public string? Notes { get; set; }
+    }
+}

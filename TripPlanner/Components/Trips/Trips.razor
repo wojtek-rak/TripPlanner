@@ -1,0 +1,473 @@
+@page "/trips"
+@using AntDesign
+@using AntDesign.Icons
+@using System.ComponentModel.DataAnnotations
+@using System.Linq
+@using Microsoft.AspNetCore.Authorization
+@using TripPlanner.Data.Repositories
+@using TripPlanner.Components.Trips
+@inherits TripPlanner.Components.Common.AuthenticatedComponentBase
+@inject ITripManager TripManager
+@inject MessageService Message
+
+@attribute [Authorize]
+
+<h3>Trips</h3>
+
+<main aria-label="Trips library">
+    <Affix OffsetTop="0" OnChange="OnAffixChanged">
+        <div class="trips-header @(isAffixed ? "is-affixed" : "")">
+            <Row Justify="@RowJustify.SpaceBetween" Align="@RowAlign.Middle">
+                <Col>
+                    <Space>
+                        <Button Type="@ButtonType.Primary" OnClick="OpenCreate">@S.AddTrip</Button>
+                    </Space>
+                </Col>
+            </Row>
+            <Row Justify="@RowJustify.SpaceBetween" Align="@RowAlign.Middle">
+                <Col Flex='@("auto")' Style="text-align:right">
+                    <Tabs ActiveKey="@activeKey" OnChange="OnTabChanged" Size="@TabSize.Large">
+                        <TabPane Key="@S.TabAll" Tab="@($"{S.TabAll} ({counts.All})")" />
+                        <TabPane Key="@S.TabYours" Tab="@($"{S.TabYours} ({counts.Yours})")" />
+                        <TabPane Key="@S.TabOthers" Tab="@($"{S.TabOthers} ({counts.Others})")" />
+                    </Tabs>
+                </Col>
+            </Row>
+        </div>
+    </Affix>
+
+    <section aria-live="polite" aria-busy="@isLoading">
+        <Space Direction="@SpaceDirection.Vertical" Size="@SpaceSize.Large" Style="width:100%">
+
+            @if (isLoading && trips.Count == 0)
+            {
+                @for (var i = 0; i < 3; i++)
+                {
+                    <div class="trip-card">
+                        <Skeleton Active Title="false" Paragraph="true" />
+                    </div>
+                }
+            }
+            else if (trips.Count == 0)
+            {
+                <Result Title="@S.EmptyTitle" SubTitle="@GetEmptyCopy()">
+                    <Extra>
+                        <Button Type="@ButtonType.Primary" OnClick="OpenCreate">@S.AddTrip</Button>
+                    </Extra>
+                </Result>
+            }
+            else
+            {
+                @foreach (var t in trips)
+                {
+                    <TripPlanner.Components.Trips.TripCard Trip="t"
+                                                            OnManageSharing="HandleManageSharing"
+                                                            OnEditTrip="HandleEdit"
+                                                            OnDuplicate="HandleDuplicate"
+                                                            OnArchive="HandleArchive" />
+                }
+
+                @if (hasMore)
+                {
+                    <div style="text-align:center">
+                        <Button Loading="@isLoadingMore" OnClick="LoadMore">@S.LoadMore</Button>
+                    </div>
+                }
+            }
+        </Space>
+    </section>
+
+    <Modal Title="@S.CreateTitle"
+           Visible="@createVisible"
+           ConfirmLoading="@createSaving"
+           OnOk="AddTripAsync"
+           OnCancel="@CloseCreate"
+           OkText="@S.Save"
+           CancelText="@S.Cancel">
+        <Form Model="@createModel" Layout="FormLayout.Vertical">
+            <FormItem Label="@S.FieldTitle">
+                <Input @bind-Value="createModel.Title" />
+            </FormItem>
+            <FormItem Label="@S.FieldCity">
+                <Input @bind-Value="createModel.City" />
+            </FormItem>
+            <FormItem Label="@S.FieldCountry">
+                <Input @bind-Value="createModel.Country" />
+            </FormItem>
+            <Row Gutter="8">
+                <Col Span="12">
+                    <FormItem Label="@S.FieldStart">
+                        <DatePicker @bind-Value="createModel.StartDate" />
+                    </FormItem>
+                </Col>
+                <Col Span="12">
+                    <FormItem Label="@S.FieldEnd">
+                        <DatePicker @bind-Value="createModel.EndDate" />
+                    </FormItem>
+                </Col>
+            </Row>
+            <FormItem Label="@S.FieldCoverUrl">
+                <Input @bind-Value="createModel.CoverUrl" Placeholder="@S.Optional" />
+            </FormItem>
+            <FormItem>
+                <Checkbox @bind-Value="createModel.IsOwner">@S.FieldIsOwner</Checkbox>
+            </FormItem>
+        </Form>
+    </Modal>
+</main>
+
+@code {
+    private static class S
+    {
+        public const string AddTrip = "Add a Trip";
+        public const string TabAll = "All";
+        public const string TabYours = "Your Trips";
+        public const string TabOthers = "Others’ Trips";
+        public const string EmptyTitle = "No trips to show";
+        public const string EmptyAll = "No trips yet. Create your first one!";
+        public const string EmptyYours = "You haven’t added any trips yet.";
+        public const string EmptyOthers = "No trips shared with you yet.";
+        public const string LoadMore = "Load more";
+        public const string CreateTitle = "Create Trip";
+        public const string Save = "Save";
+        public const string Cancel = "Cancel";
+        public const string FieldTitle = "Title";
+        public const string FieldCity = "City";
+        public const string FieldCountry = "Country";
+        public const string FieldStart = "Start Date";
+        public const string FieldEnd = "End Date";
+        public const string FieldCoverUrl = "Cover URL";
+        public const string FieldIsOwner = "This is your trip";
+        public const string Optional = "Optional";
+        public const string MsgDuplicated = "Trip duplicated";
+        public const string MsgArchived = "Trip archived";
+        public const string MsgDeleted = "Trip deleted";
+        public const string MsgCreated = "Trip created";
+    }
+
+    private bool isAffixed;
+    private string activeKey = S.TabAll;
+
+    private TripCounts counts = new();
+    private bool isLoadingMore;
+    private bool hasMore;
+    private int page = 1;
+    private const int PageSize = 5;
+
+    private bool createVisible;
+    private bool createSaving;
+    private TripInputModel createModel = new();
+
+    private List<TripDto> trips = new();
+    private bool isLoading = true;
+    private bool isSaving = false;
+    private string? error;
+    private string? validationError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            isLoading = false;
+            return;
+        }
+
+        await RefreshCountsAsync();
+        await LoadTripsAsync(reset: true);
+
+        await LoadTripsAsync();
+    }
+
+    private void OnTabChanged(string key)
+    {
+        activeKey = key;
+        _ = LoadTripsAsync(reset: true);
+    }
+
+    private void OnAffixChanged(bool fixedState)
+    {
+        isAffixed = fixedState;
+        StateHasChanged();
+    }
+
+    private async Task RefreshCountsAsync()
+    {
+        counts = await TripManager.GetCountsAsync(UserId!);
+        StateHasChanged();
+    }
+
+    private async Task LoadTripsAsync(bool reset = false)
+    {
+        error = null;
+
+        if (reset)
+        {
+            page = 1;
+            trips.Clear();
+            isLoading = true;
+            hasMore = false;
+            StateHasChanged();
+        }
+        else
+        {
+            isLoadingMore = true;
+            StateHasChanged();
+        }
+
+        try
+        {
+            // Load all (TripManager currently returns the user's trips) and apply UI filter + paging client-side
+            var all = await TripManager.ListAsync(UserId!);
+
+            // apply the same filter used by the tabs
+            var filtered = (activeKey switch
+            {
+                var k when k == S.TabYours => all.Where(t => t.IsOwner),
+                var k when k == S.TabOthers => all.Where(t => !t.IsOwner),
+                _ => all
+            }).ToList();
+
+            var items = filtered.Skip((page - 1) * PageSize).Take(PageSize).ToList();
+            var more = filtered.Count > page * PageSize;
+
+            trips.AddRange(items);
+            hasMore = more;
+
+            validationError = null; // clear form-level validation errors on successful load
+        }
+        catch
+        {
+            error = "Failed to load trips.";
+            if (reset) trips = new();
+        }
+        finally
+        {
+            isLoading = false;
+            isLoadingMore = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task AddTripAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            error = AuthError;
+            return;
+        }
+
+        // form-level validation -> show near the form, not as a page-level error
+        validationError = null;
+        if (string.IsNullOrWhiteSpace(createModel.Title))
+        {
+            validationError = "Title is required.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(createModel.City))
+        {
+            validationError = "City is required.";
+            return;
+        }
+        if (createModel.StartDate > createModel.EndDate)
+        {
+            validationError = "Start date must be on or before end date.";
+            return;
+        }
+
+        createSaving = true;
+        error = null;
+        try
+        {
+            var create = new TripCreateModel(
+                Title: createModel.Title ?? string.Empty,
+                City: createModel.City ?? string.Empty,
+                Country: createModel.Country ?? string.Empty,
+                StartDate: createModel.StartDate,
+                EndDate: createModel.EndDate,
+                CoverUrl: createModel.CoverUrl,
+                IsOwner: createModel.IsOwner,
+                Notes: createModel.Notes);
+
+            var created = await TripManager.CreateAsync(UserId!, create);
+            trips.Add(created);
+
+            // reset form state
+            createModel = new TripInputModel();
+            validationError = null;
+            createVisible = false;
+
+            await RefreshCountsAsync();
+            Message.Success(S.MsgCreated);
+        }
+        catch (ArgumentException ex)
+        {
+            // surface business/validation errors without breaking page render
+            validationError = ex.Message;
+        }
+        catch
+        {
+            error = "Add failed.";
+        }
+        finally
+        {
+            createSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RemoveTripAsync(int id)
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            error = AuthError;
+            return;
+        }
+
+        try
+        {
+            var deleted = await TripManager.RemoveAsync(id, UserId!);
+            if (deleted)
+            {
+                var item = trips.FirstOrDefault(t => t.Id == id);
+                if (item is not null) trips.Remove(item);
+            }
+            else
+            {
+                error = "Unable to delete trip.";
+            }
+        }
+        catch
+        {
+            error = "Delete request failed.";
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
+    // Added: same empty-state text selection used in TripsPage.razor
+    private string GetEmptyCopy() => activeKey switch
+    {
+        var k when k == S.TabYours => S.EmptyYours,
+        var k when k == S.TabOthers => S.EmptyOthers,
+        _ => S.EmptyAll
+    };
+
+    private void OpenCreate() => createVisible = true;
+    private void CloseCreate() => createVisible = false;
+
+    // Handlers ported from TripsPage - adapted to use TripManager / TripDto
+    private async Task HandleDuplicate(TripDto t)
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            error = AuthError;
+            return;
+        }
+
+        try
+        {
+            var req = new TripCreateModel(
+                Title: t.Title,
+                City: t.City,
+                Country: t.Country,
+                StartDate: t.StartDate,
+                EndDate: t.EndDate,
+                CoverUrl: t.CoverUrl,
+                IsOwner: t.IsOwner,
+                Notes: t.Notes);
+
+            var copy = await TripManager.CreateAsync(UserId!, req);
+            if (copy is not null)
+            {
+                trips.Insert(0, copy);
+                await RefreshCountsAsync();
+                Message.Success(S.MsgDuplicated);
+            }
+        }
+        catch
+        {
+            error = "Duplicate failed.";
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
+    private Task LoadMore()
+    {
+        page++;
+        return LoadTripsAsync(reset: false);
+    }
+
+    private async Task HandleArchive(TripDto t)
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            error = AuthError;
+            return;
+        }
+
+        try
+        {
+            var ok = await TripManager.RemoveAsync(t.Id, UserId!);
+            if (ok)
+            {
+                trips.RemoveAll(x => x.Id == t.Id);
+                await RefreshCountsAsync();
+                Message.Success(S.MsgArchived);
+            }
+            else
+            {
+                error = "Unable to archive trip.";
+            }
+        }
+        catch
+        {
+            error = "Archive request failed.";
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
+    // Actions from TripCard
+    private Task HandleManageSharing(TripDto t)
+    {
+        Message.Info($"Manage sharing for \"{t.Title}\"");
+        return Task.CompletedTask;
+    }
+
+    private Task HandleEdit(TripDto t)
+    {
+        Message.Info($"Edit \"{t.Title}\"");
+        return Task.CompletedTask;
+    }
+
+    // Note: Delete is now handled on the Trip Detail page.
+    private class TripInputModel
+    {
+        [Required]
+        public string? Title { get; set; }
+
+        [Required]
+        public string? City { get; set; }
+
+        public string? Country { get; set; }
+
+        public string? CoverUrl { get; set; }
+
+        [Required]
+        public DateTime StartDate { get; set; } = DateTime.Today;
+
+        [Required]
+        public DateTime EndDate { get; set; } = DateTime.Today;
+
+        public bool IsOwner { get; set; } = true;
+
+        public string? Notes { get; set; }
+    }
+}
